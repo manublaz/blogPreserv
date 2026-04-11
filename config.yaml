@@ -1,0 +1,64 @@
+blogs:
+  - url: "https://cinedocnet-patrimonio.blogspot.com/"
+    type: "blogspot"
+    title: "CineDocNet - Patrimonio"
+    enabled: true
+
+  - url: "http://www.redauvi.com/"
+    type: "blogspot"
+    title: "RedAuvi"
+    enabled: true
+
+  - url: "https://meitdoc.blogspot.com/"
+    type: "blogspot"
+    title: "MEIT Doc"
+    enabled: true
+
+  - url: "https://archivozmagazine.blogspot.com/"
+    type: "blogspot"
+    title: "Archivoz Magazine"
+    enabled: true
+
+author:
+  name: "Alfonso López Yepes"
+  role: "Profesor y Catedrático"
+  institution: "Universidad Complutense de Madrid"
+  email: "alopez@ucm.es"
+
+design:
+  accent_color: "#1d4ed8"
+  secondary_color: "#475569"
+  background_color: "#ffffff"
+  text_color: "#1e293b"
+  font_size_base: "17px"
+  font_family: "Georgia, 'Times New Roman', serif"
+  font_family_ui: "'IBM Plex Sans', system-ui, sans-serif"
+  font_family_mono: "'IBM Plex Mono', 'Courier New', monospace"
+
+output:
+  dir: "./output"
+  embed_images: true
+  single_file: true
+  max_image_size_kb: 500
+
+ai:
+  enabled: true                          # Cambiar a true para activar
+  endpoint: "http://127.0.0.1:1234/v1" # URL de LM Studio (IP de red local)
+  model: "google/gemma-4-26b-a4b"        # Modelo cargado en LM Studio
+  temperature: 0.235
+  max_tokens: 512
+  batch_size: 5
+  delay_between_calls: 0.5
+  timeout: 2400
+  use_for:
+    - generate_tags     # Generar/completar etiquetas tematicas
+    - summarize         # Resumen de 2-3 frases para metadatos
+    - classify          # Clasificar segun vocabulario controlado
+    - reformat          # Reformatear texto sin estructura (mayusculas, parrafos)
+    - clean_html      # Reparar HTML muy degradado (lento, solo si necesario)
+
+scraping:
+  delay_between_requests: 1.5
+  max_posts_per_blog: 0
+  timeout: 90
+  user_agent: "Mozilla/5.0 (compatible; BlogPreservationBot/1.0)"
