@@ -1,0 +1,93 @@
+{
+  "slug": "meit-doc",
+  "title": "MEIT Doc",
+  "timestamp": "2026-04-11T14:39:48",
+  "metrics": {
+    "M1_entry_coverage": 1.0,
+    "M2_text_integrity": 0.9531,
+    "M3_image_coverage": 1.0,
+    "M4_video_coverage": 0.5,
+    "M5_dc_completeness": 1.0,
+    "M6_mets_completeness": 1.0,
+    "M7_tag_coverage": 1.0,
+    "M8_date_fidelity": 1.0,
+    "M9_link_integrity": 1.0,
+    "M10_global_score": 0.9406
+  },
+  "details": {
+    "M1": {
+      "original": 17,
+      "preserved": 17,
+      "lost": 0
+    },
+    "M2": {
+      "sample_size": 17,
+      "avg_token_overlap": 0.9531
+    },
+    "M3": {
+      "images_detected": 25,
+      "images_embedded_b64": 25
+    },
+    "M4": {
+      "youtube_detected": 22,
+      "youtube_preserved": 11
+    },
+    "M5": {
+      "fields_expected": [
+        "DC.subject",
+        "DC.format",
+        "DC.language",
+        "DC.title",
+        "DC.creator",
+        "DC.identifier",
+        "DC.coverage",
+        "DC.rights",
+        "DC.publisher",
+        "DC.description",
+        "DC.date",
+        "DC.type"
+      ],
+      "fields_present": [
+        "DC.subject",
+        "DC.format",
+        "DC.language",
+        "DC.title",
+        "DC.creator",
+        "DC.identifier",
+        "DC.coverage",
+        "DC.rights",
+        "DC.publisher",
+        "DC.description",
+        "DC.date",
+        "DC.type"
+      ],
+      "fields_missing": []
+    },
+    "M6": {
+      "sections_expected": [
+        "metsHdr",
+        "dmdSec",
+        "mods:mods"
+      ],
+      "sections_present": [
+        "metsHdr",
+        "dmdSec",
+        "mods:mods"
+      ]
+    },
+    "M7": {
+      "tags_original": 41,
+      "tags_preserved": 41
+    },
+    "M8": {
+      "entries_with_valid_date": 17,
+      "total_entries": 17
+    },
+    "M9": {
+      "blogger_edit_links_original": 0,
+      "blogger_edit_links_remaining": 0,
+      "fixed_ratio": 1.0
+    }
+  },
+  "score": 0.9406
+}

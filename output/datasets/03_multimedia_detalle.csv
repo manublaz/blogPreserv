@@ -1,0 +1,5 @@
+Blog,Entradas,Imagenes_detectadas,Imagenes_incrustadas_b64,Imagenes_error,Tasa_imagen_pct,Videos_YouTube_detectados,Videos_preservados,Videos_perdidos,Tasa_video_pct,Imagenes_por_entrada,Videos_por_entrada
+CineDocNet - Patrimonio,388,3037,2996,41,98.65,1494,1035,459,69.28,7.83,3.85
+RedAuvi,271,1831,1807,24,98.69,1033,909,124,88.0,6.76,3.81
+MEIT Doc,17,25,25,0,100.0,22,11,11,50.0,1.47,1.29
+Archivoz Magazine,459,3365,3329,36,98.93,1281,1122,159,87.59,7.33,2.79

@@ -1,0 +1,11 @@
+Métrica,Descripción,CineDocNet - Patrimonio,RedAuvi,MEIT Doc,Archivoz Magazine,Media
+M1,Cobertura de entradas,1.0000,1.0000,1.0000,1.0000,1.0000
+M2,Integridad textual,0.9711,0.9652,0.9531,0.9742,0.9659
+M3,Cobertura de imágenes,0.9865,0.9869,1.0000,0.9893,0.9907
+M4,Cobertura de vídeos,0.6928,0.8800,0.5000,0.8759,0.7372
+M5,Completitud metadatos DC,1.0000,1.0000,1.0000,1.0000,1.0000
+M6,Completitud METS,1.0000,1.0000,1.0000,1.0000,1.0000
+M7,Cobertura de etiquetas,1.0000,1.0000,1.0000,1.0000,1.0000
+M8,Fidelidad de fechas,1.0000,1.0000,1.0000,1.0000,1.0000
+M9,Integridad de enlaces,1.0000,1.0000,1.0000,1.0000,1.0000
+M10,Puntuación global,0.9615,0.9791,0.9406,0.9808,0.9655

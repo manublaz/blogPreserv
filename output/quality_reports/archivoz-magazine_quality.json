@@ -1,0 +1,93 @@
+{
+  "slug": "archivoz-magazine",
+  "title": "Archivoz Magazine",
+  "timestamp": "2026-04-11T15:53:47",
+  "metrics": {
+    "M1_entry_coverage": 1.0,
+    "M2_text_integrity": 0.9742,
+    "M3_image_coverage": 0.9893,
+    "M4_video_coverage": 0.8759,
+    "M5_dc_completeness": 1.0,
+    "M6_mets_completeness": 1.0,
+    "M7_tag_coverage": 1.0,
+    "M8_date_fidelity": 1.0,
+    "M9_link_integrity": 1.0,
+    "M10_global_score": 0.9808
+  },
+  "details": {
+    "M1": {
+      "original": 459,
+      "preserved": 459,
+      "lost": 0
+    },
+    "M2": {
+      "sample_size": 50,
+      "avg_token_overlap": 0.9742
+    },
+    "M3": {
+      "images_detected": 3365,
+      "images_embedded_b64": 3329
+    },
+    "M4": {
+      "youtube_detected": 1281,
+      "youtube_preserved": 1122
+    },
+    "M5": {
+      "fields_expected": [
+        "DC.subject",
+        "DC.format",
+        "DC.language",
+        "DC.title",
+        "DC.creator",
+        "DC.identifier",
+        "DC.coverage",
+        "DC.rights",
+        "DC.publisher",
+        "DC.description",
+        "DC.date",
+        "DC.type"
+      ],
+      "fields_present": [
+        "DC.subject",
+        "DC.format",
+        "DC.language",
+        "DC.title",
+        "DC.creator",
+        "DC.identifier",
+        "DC.coverage",
+        "DC.rights",
+        "DC.publisher",
+        "DC.description",
+        "DC.date",
+        "DC.type"
+      ],
+      "fields_missing": []
+    },
+    "M6": {
+      "sections_expected": [
+        "metsHdr",
+        "dmdSec",
+        "mods:mods"
+      ],
+      "sections_present": [
+        "metsHdr",
+        "dmdSec",
+        "mods:mods"
+      ]
+    },
+    "M7": {
+      "tags_original": 3099,
+      "tags_preserved": 3099
+    },
+    "M8": {
+      "entries_with_valid_date": 459,
+      "total_entries": 459
+    },
+    "M9": {
+      "blogger_edit_links_original": 5,
+      "blogger_edit_links_remaining": 0,
+      "fixed_ratio": 1.0
+    }
+  },
+  "score": 0.9808
+}
