@@ -19,6 +19,16 @@ blogs:
     title: "Archivoz Magazine"
     enabled: true
 
+  - url: "http://bibliored30.com/"
+    type: "blogspot"
+    title: "Bibliored30"
+    enabled: true
+
+  - url: "https://redauviccinf.blogspot.com/"
+    type: "blogspot"
+    title: "REDAUVICCINF Patrimonio audiovisual iberoamericano en ciencias informacióne"
+    enabled: true
+
 author:
   name: "Alfonso López Yepes"
   role: "Profesor y Catedrático"
@@ -38,16 +48,28 @@ design:
 output:
   dir: "./output"
   embed_images: true
+  # single_file: false  → un único archivo HTML autocontenido (recomendado para <200 entradas)
+  # single_file: false → carpeta blog-slug/ con index.html + una página HTML por entrada
+  #                      (recomendado para blogs grandes, evita archivos de cientos de MB)
   single_file: true
-  max_image_size_kb: 500
+  max_image_size_kb: 5000000
+
+scraping:
+  # verify_ssl: false  → desactiva verificación SSL para blogs con certificados mal configurados
+  #                       (habitual en blogs Blogger con dominio personalizado antiguo)
+  verify_ssl: false
+  delay_between_requests: 1.5
+  max_posts_per_blog: 0
+  timeout: 90
+  user_agent: "Mozilla/5.0 (compatible; BlogPreservationBot/1.0)"
 
 ai:
-  enabled: true                          # Cambiar a true para activar
+  enabled: false                          # Cambiar a true para activar
   endpoint: "http://127.0.0.1:1234/v1" # URL de LM Studio (IP de red local)
   model: "google/gemma-4-26b-a4b"        # Modelo cargado en LM Studio
   temperature: 0.235
   max_tokens: 512
-  batch_size: 5
+  batch_size: 1
   delay_between_calls: 0.5
   timeout: 2400
   use_for:
@@ -57,8 +79,4 @@ ai:
     - reformat          # Reformatear texto sin estructura (mayusculas, parrafos)
     - clean_html      # Reparar HTML muy degradado (lento, solo si necesario)
 
-scraping:
-  delay_between_requests: 1.5
-  max_posts_per_blog: 0
-  timeout: 90
-  user_agent: "Mozilla/5.0 (compatible; BlogPreservationBot/1.0)"
+

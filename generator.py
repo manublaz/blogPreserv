@@ -16,40 +16,377 @@ logger = logging.getLogger(__name__)
 
 def generate_site(posts: list, blog_cfg: dict, config: dict, output_dir: Path) -> Path:
     """
-    Genera el sitio HTML completo para un blog.
-    Devuelve la ruta al archivo generado.
+    Genera el sitio HTML para un blog.
+    Modos (output.single_file en config.yaml):
+      true  → un único archivo HTML autocontenido  [por defecto]
+      false → carpeta blog-slug/ con index.html + una página por post
+    Devuelve la ruta al archivo/directorio generado.
     """
-    design   = config.get("design", {})
-    author   = config.get("author", {})
+    design     = config.get("design", {})
+    author     = config.get("author", {})
     blog_title = blog_cfg.get("title", "Blog")
-    slug     = slugify(blog_title)
+    slug       = slugify(blog_title)
+    single     = config.get("output", {}).get("single_file", True)
 
     # Ordenar posts por fecha descendente
     posts_sorted = sorted(
         posts, key=lambda p: p.get("published", ""), reverse=True
     )
 
-    # Construir índice de búsqueda (texto plano por post)
+    # Construir índice de búsqueda y cronológico (común a ambos modos)
     search_index = _build_search_index(posts_sorted)
+    timeline     = _build_timeline(posts_sorted)
 
-    # Construir índice cronológico
-    timeline = _build_timeline(posts_sorted)
+    if single:
+        # ── MODO FICHERO ÚNICO ─────────────────────────────────────────────
+        html = _render_page(
+            posts=posts_sorted,
+            search_index=search_index,
+            timeline=timeline,
+            blog_title=blog_title,
+            blog_url=blog_cfg.get("url", ""),
+            author=author,
+            design=design,
+        )
+        out_path = output_dir / f"{slug}.html"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(html, encoding="utf-8")
+        logger.info(f"Sitio generado (modo único): {out_path}")
+        return out_path
+    else:
+        # ── MODO MULTI-FICHERO ─────────────────────────────────────────────
+        return _generate_multifile(
+            posts=posts_sorted,
+            search_index=search_index,
+            timeline=timeline,
+            blog_title=blog_title,
+            blog_url=blog_cfg.get("url", ""),
+            author=author,
+            design=design,
+            output_dir=output_dir,
+            slug=slug,
+        )
 
-    html = _render_page(
-        posts=posts_sorted,
+
+def _generate_multifile(posts, search_index, timeline, blog_title, blog_url,
+                        author, design, output_dir, slug) -> Path:
+    """
+    Genera una carpeta blog-slug/ con:
+      - index.html   → portada con buscador, índice cronológico y listado de posts
+      - posts/NNN-slug-del-titulo.html  → una página por post
+    Todas las imágenes siguen embebidas en base64.
+    El buscador funciona cross-page mediante sessionStorage.
+    """
+    site_dir  = output_dir / slug
+    posts_dir = site_dir / "posts"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    posts_dir.mkdir(exist_ok=True)
+
+    # Rutas relativas de cada post
+    post_paths = []
+    for i, post in enumerate(posts):
+        title_slug = slugify(post.get("title", "") or f"entrada-{i+1}")[:60]
+        fname = f"{i+1:04d}-{title_slug}.html"
+        post_paths.append(fname)
+
+    # ── Generar páginas individuales ──────────────────────────────────────
+    for i, (post, fname) in enumerate(zip(posts, post_paths)):
+        prev_link = f'<a href="{post_paths[i-1]}" class="nav-btn">← Anterior</a>' if i > 0 else ""
+        next_link = f'<a href="{post_paths[i+1]}" class="nav-btn">Siguiente →</a>' if i < len(posts)-1 else ""
+        html = _render_post_page(post, i, blog_title, prev_link, next_link, design, author)
+        (posts_dir / fname).write_text(html, encoding="utf-8")
+
+    # ── Generar index.html ────────────────────────────────────────────────
+    index_html = _render_index_page(
+        posts=posts,
+        post_paths=post_paths,
         search_index=search_index,
         timeline=timeline,
         blog_title=blog_title,
-        blog_url=blog_cfg.get("url", ""),
+        blog_url=blog_url,
         author=author,
         design=design,
     )
+    (site_dir / "index.html").write_text(index_html, encoding="utf-8")
 
-    out_path = output_dir / f"{slug}.html"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-    logger.info(f"Sitio generado: {out_path}")
-    return out_path
+    total = len(posts)
+    logger.info(f"Sitio generado (modo multi-fichero): {site_dir}  [{total} páginas]")
+    return site_dir
+
+
+def _render_post_page(post: dict, idx: int, blog_title: str,
+                      prev_link: str, next_link: str, design: dict, author: dict) -> str:
+    """Genera el HTML de una página individual de post."""
+    accent   = design.get("accent_color", "#1d4ed8")
+    bg       = design.get("background_color", "#ffffff")
+    text_col = design.get("text_color", "#1e293b")
+    font_body= design.get("font_family", "Georgia, serif")
+    font_ui  = design.get("font_family_ui", "'IBM Plex Sans', system-ui, sans-serif")
+
+    title    = post.get("title", "Sin título") or "Sin título"
+    date     = post.get("published", "")
+    url      = post.get("url", "")
+    tags     = post.get("tags", [])
+    body     = post.get("clean_html", "")
+    auth     = post.get("author", "") or author.get("name", "")
+
+    date_display = ""
+    if date:
+        try:
+            dt = datetime.strptime(date[:10], "%Y-%m-%d")
+            date_display = dt.strftime("%-d de %B de %Y")
+        except Exception:
+            date_display = date[:10]
+
+    tags_html = " ".join(f'<span class="post-tag">{t}</span>' for t in tags[:8])
+    orig_link = (f'<a href="{url}" target="_blank" rel="noopener" class="orig-link">↗ Ver entrada original en Blogger</a>'
+                 if url else "")
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{_escape(title)} — {_escape(blog_title)}</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:{font_body};background:{bg};color:{text_col};line-height:1.75;font-size:17px;padding:0 1rem 3rem}}
+    .page-wrap{{max-width:860px;margin:0 auto}}
+    .site-nav{{display:flex;align-items:center;gap:1rem;padding:1rem 0;border-bottom:2px solid {accent};margin-bottom:2rem;font-family:{font_ui};flex-wrap:wrap}}
+    .site-nav a{{color:{accent};text-decoration:none;font-size:.9rem}}
+    .site-nav a:hover{{text-decoration:underline}}
+    .site-title{{font-weight:700;color:{accent};font-size:1rem}}
+    .post-header{{margin-bottom:1.5rem}}
+    h1{{font-size:1.55rem;line-height:1.35;color:{text_col};margin-bottom:.6rem}}
+    .post-meta{{font-family:{font_ui};font-size:.85rem;color:#64748b;display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:.8rem}}
+    .post-tag{{background:{accent}18;color:{accent};padding:.15rem .5rem;border-radius:3px;font-size:.78rem;font-family:{font_ui}}}
+    .post-body{{margin-top:1.5rem}}
+    .post-body img{{max-width:100%!important;width:100%!important;height:auto!important;display:block;margin:.75rem 0;border-radius:4px}}
+    .post-body p{{margin:.9rem 0}}
+    .post-body h2,.post-body h3{{margin:1.4rem 0 .5rem;color:{accent}}}
+    .post-body a{{color:{accent}}}
+    .post-body figure{{margin:.75rem 0}}
+    .post-body figcaption{{font-size:.82rem;color:#64748b;font-family:{font_ui};margin-top:.3rem}}
+    .post-body .yt-wrap{{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:.75rem 0;border-radius:6px}}
+    .post-body .yt-wrap iframe{{position:absolute;top:0;left:0;width:100%;height:100%;border:0}}
+    .post-footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #e2e8f0;font-family:{font_ui};font-size:.85rem;color:#64748b;display:flex;flex-wrap:wrap;gap:1rem;align-items:center}}
+    .orig-link{{color:{accent};text-decoration:none}}
+    .orig-link:hover{{text-decoration:underline}}
+    .post-nav{{display:flex;justify-content:space-between;margin-top:2.5rem;padding-top:1.5rem;border-top:2px solid {accent}22;font-family:{font_ui}}}
+    .nav-btn{{color:{accent};text-decoration:none;font-size:.9rem;padding:.4rem .8rem;border:1px solid {accent}44;border-radius:4px}}
+    .nav-btn:hover{{background:{accent}11}}
+  </style>
+</head>
+<body>
+<div class="page-wrap">
+  <nav class="site-nav">
+    <span class="site-title">{_escape(blog_title)}</span>
+    <a href="../index.html">← Volver al índice</a>
+  </nav>
+  <article>
+    <header class="post-header">
+      <h1>{_escape(title)}</h1>
+      <div class="post-meta">
+        <span>📅 {date_display}</span>
+        {"<span>✍ " + _escape(auth) + "</span>" if auth else ""}
+        {tags_html}
+      </div>
+    </header>
+    <div class="post-body">
+      {body}
+    </div>
+    <footer class="post-footer">
+      {orig_link}
+      <span style="margin-left:auto">{date}</span>
+    </footer>
+  </article>
+  <nav class="post-nav">
+    <div>{prev_link}</div>
+    <div>{next_link}</div>
+  </nav>
+</div>
+</body>
+</html>"""
+
+
+def _render_index_page(posts, post_paths, search_index, timeline,
+                       blog_title, blog_url, author, design) -> str:
+    """Genera el index.html del modo multi-fichero."""
+    accent    = design.get("accent_color", "#1d4ed8")
+    secondary = design.get("secondary_color", "#475569")
+    bg        = design.get("background_color", "#ffffff")
+    text_col  = design.get("text_color", "#1e293b")
+    font_body = design.get("font_family", "Georgia, serif")
+    font_ui   = design.get("font_family_ui", "'IBM Plex Sans', system-ui, sans-serif")
+    font_mono = design.get("font_family_mono", "'IBM Plex Mono', monospace")
+
+    author_name = author.get("name", "")
+    author_role = author.get("role", "")
+    author_inst = author.get("institution", "")
+    now_str     = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Cards del listado
+    cards_html = []
+    for i, (post, fname) in enumerate(zip(posts, post_paths)):
+        title   = post.get("title", "Sin título") or "Sin título"
+        date    = post.get("published", "")
+        tags    = post.get("tags", [])
+        excerpt = post.get("excerpt", "")
+        date_display = ""
+        if date:
+            try:
+                dt = datetime.strptime(date[:10], "%Y-%m-%d")
+                date_display = dt.strftime("%-d %b %Y")
+            except Exception:
+                date_display = date[:10]
+        tags_html = "".join(f'<span class="post-tag">{t}</span>' for t in tags[:6])
+        card = f"""      <article class="post-card" data-idx="{i}">
+        <a href="posts/{fname}" class="post-link">
+          <div class="post-meta-row">
+            <span class="post-date">{date_display}</span>
+            <span class="post-num">#{i+1:03d}</span>
+          </div>
+          <div class="post-title">{_escape(title)}</div>
+          <div class="post-tags">{tags_html}</div>
+          {"<div class='post-excerpt'>" + _escape(excerpt) + "</div>" if excerpt else ""}
+        </a>
+      </article>"""
+        cards_html.append(card)
+
+    posts_list = "\n".join(cards_html)
+    sidebar    = _render_sidebar(timeline, path_prefix="posts/", post_paths=post_paths)
+    search_js  = json.dumps(search_index, ensure_ascii=False)
+    all_tags   = sorted(set(t for p in posts for t in p.get("tags", [])))
+    tags_cloud = " ".join(
+        f'<button class="tag-btn" onclick="filterTag(\'{t}\')">{t}</button>'
+        for t in all_tags[:60]
+    )
+    dc_meta    = _render_dublin_core(blog_title, blog_url, author_name, posts)
+    mets_comment = _render_mets_comment(blog_title, blog_url, author_name, author_inst, posts, now_str)
+    total      = len(posts)
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{blog_title} — Archivo Digital</title>
+  {dc_meta}
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:{font_ui};background:{bg};color:{text_col};font-size:16px}}
+    .layout{{display:grid;grid-template-columns:280px 1fr;min-height:100vh;max-width:1380px;margin:0 auto}}
+    @media(max-width:860px){{.layout{{grid-template-columns:1fr}}.sidebar{{display:none}}}}
+    .sidebar{{background:#f8fafc;border-right:1px solid #e2e8f0;padding:1.5rem 1rem;overflow-y:auto;position:sticky;top:0;height:100vh}}
+    .main{{padding:1.5rem 2rem 3rem}}
+    .site-header{{border-bottom:3px solid {accent};padding-bottom:1rem;margin-bottom:1.5rem}}
+    .site-title{{font-size:1.45rem;font-weight:700;color:{accent};line-height:1.2}}
+    .site-subtitle{{font-size:.85rem;color:{secondary};margin-top:.3rem}}
+    .author-block{{margin-top:.6rem;font-size:.82rem;color:{secondary}}}
+    .search-wrap{{display:flex;gap:.5rem;margin-bottom:1rem}}
+    #searchInput{{flex:1;padding:.5rem .75rem;border:1.5px solid #cbd5e1;border-radius:6px;font-size:.95rem;font-family:{font_ui}}}
+    #searchInput:focus{{outline:none;border-color:{accent}}}
+    .btn{{padding:.45rem .9rem;background:{accent};color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:{font_ui};font-size:.9rem}}
+    .btn:hover{{opacity:.88}}
+    .stats-bar{{font-size:.82rem;color:{secondary};margin-bottom:.75rem}}
+    .tags-cloud{{margin-bottom:1.2rem;display:flex;flex-wrap:wrap;gap:.35rem}}
+    .tag-btn{{background:{accent}15;color:{accent};border:1px solid {accent}33;padding:.2rem .55rem;border-radius:4px;cursor:pointer;font-size:.78rem;font-family:{font_ui}}}
+    .tag-btn:hover,.tag-btn.active{{background:{accent};color:#fff}}
+    .posts-list{{display:flex;flex-direction:column;gap:.6rem}}
+    .post-card{{border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;transition:box-shadow .15s}}
+    .post-card:hover{{box-shadow:0 3px 14px {accent}22}}
+    .post-link{{display:block;padding:.85rem 1.1rem;text-decoration:none;color:inherit}}
+    .post-meta-row{{display:flex;justify-content:space-between;font-size:.78rem;color:{secondary};margin-bottom:.3rem;font-family:{font_ui}}}
+    .post-title{{font-size:1rem;font-weight:600;color:{text_col};line-height:1.35;margin-bottom:.3rem;font-family:{font_body}}}
+    .post-card:hover .post-title{{color:{accent}}}
+    .post-tags{{display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.25rem}}
+    .post-tag{{background:{accent}12;color:{accent};padding:.1rem .4rem;border-radius:3px;font-size:.72rem}}
+    .post-excerpt{{font-size:.82rem;color:{secondary};margin-top:.3rem;line-height:1.4}}
+    .post-num{{font-family:{font_mono};font-size:.75rem;color:#94a3b8}}
+    .sidebar-heading{{font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.06em;color:{secondary};margin-bottom:.6rem;padding-bottom:.3rem;border-bottom:1px solid #e2e8f0}}
+    .sidebar-year{{font-weight:600;font-size:.9rem;color:{text_col};margin:.7rem 0 .2rem;cursor:pointer}}
+    .sidebar-year:hover{{color:{accent}}}
+    .sidebar-months{{padding-left:.6rem;margin-bottom:.3rem}}
+    .sidebar-month{{font-size:.82rem;color:{secondary};cursor:pointer;padding:.15rem 0;display:flex;justify-content:space-between}}
+    .sidebar-month:hover{{color:{accent}}}
+    .post-count{{background:{accent}18;color:{accent};border-radius:9px;padding:.05rem .4rem;font-size:.73rem;font-family:{font_mono}}}
+    #noResults{{display:none;text-align:center;padding:2rem;color:{secondary};font-size:.95rem}}
+  </style>
+</head>
+<body>
+{mets_comment}
+<div class="layout">
+  <aside class="sidebar">
+    {sidebar}
+  </aside>
+  <main class="main">
+    <header class="site-header">
+      <div class="site-title">{_escape(blog_title)}</div>
+      <div class="site-subtitle">Archivo digital — {total} entradas preservadas</div>
+      {"<div class='author-block'>" + _escape(author_name) + (" · " + _escape(author_role) if author_role else "") + ("  <small>" + _escape(author_inst) + "</small>" if author_inst else "") + "</div>" if author_name else ""}
+    </header>
+    <div class="search-wrap">
+      <input id="searchInput" type="search" placeholder="Buscar en el archivo…" oninput="doSearch(this.value)" onkeydown="if(event.key==='Escape')clearSearch()">
+      <button class="btn" onclick="clearSearch()">✕</button>
+    </div>
+    <div class="tags-cloud">{tags_cloud}</div>
+    <div class="stats-bar" id="statsBar">Mostrando <b id="visCount">{total}</b> de <b>{total}</b> entradas</div>
+    <div class="posts-list" id="postsList">
+{posts_list}
+    </div>
+    <div id="noResults">No se encontraron entradas para esta búsqueda.</div>
+  </main>
+</div>
+<script>
+const IDX={search_js};
+let activeTag=null,lastQ="";
+function norm(s){{return(s||"").toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g,"");}}
+function doSearch(q){{
+  lastQ=q;
+  const qn=norm(q),cards=document.querySelectorAll(".post-card");
+  let vis=0;
+  cards.forEach(c=>{{
+    const i=parseInt(c.dataset.idx),d=IDX[i];
+    const textMatch=!qn||[d.title,d.text,d.excerpt,(d.tags||[]).join(" ")].some(s=>norm(s).includes(qn));
+    const tagMatch=!activeTag||(d.tags||[]).includes(activeTag);
+    const show=textMatch&&tagMatch;
+    c.style.display=show?"":"none";
+    if(show)vis++;
+  }});
+  document.getElementById("visCount").textContent=vis;
+  document.getElementById("noResults").style.display=vis===0?"block":"none";
+}}
+function filterTag(t){{
+  if(activeTag===t){{activeTag=null;document.querySelectorAll(".tag-btn").forEach(b=>b.classList.remove("active"));}}
+  else{{activeTag=t;document.querySelectorAll(".tag-btn").forEach(b=>b.classList.toggle("active",b.textContent===t));}}
+  doSearch(lastQ);
+}}
+function filterMonth(key){{
+  const cards=document.querySelectorAll(".post-card");
+  let vis=0;
+  cards.forEach(c=>{{
+    const i=parseInt(c.dataset.idx),d=IDX[i];
+    const show=d.month===key;
+    c.style.display=show?"":"none";
+    if(show)vis++;
+  }});
+  activeTag=null;lastQ="";
+  document.getElementById("searchInput").value="";
+  document.getElementById("visCount").textContent=vis;
+  document.getElementById("noResults").style.display=vis===0?"block":"none";
+}}
+function clearSearch(){{
+  document.getElementById("searchInput").value="";
+  activeTag=null;lastQ="";
+  document.querySelectorAll(".tag-btn").forEach(b=>b.classList.remove("active"));
+  document.querySelectorAll(".post-card").forEach(c=>c.style.display="");
+  document.getElementById("visCount").textContent={total};
+  document.getElementById("noResults").style.display="none";
+}}
+</script>
+</body>
+</html>"""
+
 
 
 def _build_search_index(posts: list) -> list:
@@ -817,7 +1154,7 @@ def _render_post(post: dict, idx: int) -> str:
         </article>"""
 
 
-def _render_sidebar(timeline: dict) -> str:
+def _render_sidebar(timeline: dict, path_prefix: str = "", post_paths: list = None) -> str:
     """Renderiza el HTML del índice cronológico en el sidebar con filtrado por fecha real."""
     html_parts = ['<div class="sidebar-section">',
                   '<div class="sidebar-heading">Índice cronológico</div>']

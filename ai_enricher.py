@@ -107,7 +107,7 @@ class AIEnricher:
         self.model     = ai_cfg.get("model", "local-model")
         self.use_for   = set(ai_cfg.get("use_for", []))
         self.timeout   = ai_cfg.get("timeout", 120)
-        self.batch_size= ai_cfg.get("batch_size", 5)
+        self.batch_size= ai_cfg.get("batch_size", 1)  # 1 = un post a la vez
         self.temp      = ai_cfg.get("temperature", 0.2)
         self.max_tokens= ai_cfg.get("max_tokens", 512)
         self.delay     = ai_cfg.get("delay_between_calls", 0.5)
@@ -141,9 +141,16 @@ class AIEnricher:
         except Exception as e:
             return False, False, str(e)
 
-    def _call(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-        """Llama a la API de LM Studio. Devuelve el texto de respuesta o None."""
+    def _call(self, system_prompt: str, user_prompt: str,
+              _truncate_at: int = 0) -> Optional[str]:
+        """
+        Llama a la API de LM Studio con reintento automatico en 400.
+        Si falla por exceso de contexto, reintenta hasta 3 veces
+        reduciendo el user_prompt a la mitad en cada intento.
+        """
         url = f"{self.endpoint}/chat/completions"
+        if _truncate_at > 0:
+            user_prompt = user_prompt[:_truncate_at]
         payload = {
             "model":       self.model,
             "temperature": self.temp,
@@ -155,11 +162,23 @@ class AIEnricher:
         }
         try:
             resp = requests.post(url, json=payload, timeout=self.timeout)
+            if resp.status_code == 400:
+                current_len = len(user_prompt)
+                if current_len > 200:
+                    new_len = max(200, current_len // 2)
+                    logger.warning("400 Bad Request — reintento con prompt truncado a %d chars (era %d)", new_len, current_len)
+                    return self._call(system_prompt, user_prompt, _truncate_at=new_len)
+                else:
+                    logger.error("400 Bad Request con prompt muy corto (%d chars). Omitiendo.", current_len)
+                    return None
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"].strip()
         except requests.exceptions.ConnectionError:
-            logger.error("LM Studio no responde. ¿Está iniciado en %s?", self.endpoint)
+            logger.error("LM Studio no responde en %s", self.endpoint)
+            return None
+        except requests.exceptions.Timeout:
+            logger.error("Timeout (%ds) en llamada AI", self.timeout)
             return None
         except Exception as e:
             logger.error("Error en llamada AI: %s", e)
@@ -250,7 +269,7 @@ class AIEnricher:
         clean_html = post.get("clean_html", "")
         soup       = BeautifulSoup(clean_html, "html.parser")
         text       = soup.get_text(" ", strip=True)
-        text       = " ".join(text.split())[:1500]  # Truncar a 1500 chars
+        text       = " ".join(text.split())[:1200]  # Limite seguro de contexto
 
         if len(text) < 100:
             return post.get("excerpt", "")
@@ -315,8 +334,11 @@ class AIEnricher:
 
     def clean_html_ai(self, post: dict) -> str:
         """
-        Repara HTML muy degradado. Solo se usa si la limpieza heurística
-        produce un resultado con muy poco texto legible.
+        Repara HTML muy degradado preservando SIEMPRE:
+          - Todas las etiquetas <img> con sus atributos (especialmente src base64)
+          - Todos los iframes de YouTube
+          - La anchura al 100% de las imágenes
+        Solo se activa si el texto limpio es muy escaso (< 200 chars).
         """
         pid = post.get("id", post.get("title", ""))
         cached = self._load_cache(pid, "clean_html")
@@ -331,36 +353,82 @@ class AIEnricher:
         if len(text.strip()) > 200:
             return clean_html
 
-        raw_html = post.get("raw_html", "")[:3000]  # Limitar tamaño
+        # Extraer y proteger imágenes e iframes ANTES de enviar a la IA
+        import re as _re
+        img_placeholder  = {}
+        iframe_placeholder = {}
+
+        def _protect_imgs(html):
+            """Reemplaza <img ...> por tokens ##IMG_N## para protegerlas."""
+            imgs = _re.findall(r'<img[^>]*>', html, _re.IGNORECASE | _re.DOTALL)
+            for n, tag in enumerate(imgs):
+                token = f"##IMG_{n}##"
+                img_placeholder[token] = tag
+                html = html.replace(tag, token, 1)
+            return html
+
+        def _protect_iframes(html):
+            """Reemplaza iframes de YouTube por tokens ##IFRAME_N##."""
+            iframes = _re.findall(r'<iframe[^>]*youtube[^>]*>.*?</iframe>|<div[^>]*yt-wrap[^>]*>.*?</div>',
+                                  html, _re.IGNORECASE | _re.DOTALL)
+            for n, tag in enumerate(iframes):
+                token = f"##IFRAME_{n}##"
+                iframe_placeholder[token] = tag
+                html = html.replace(tag, token, 1)
+            return html
+
+        def _restore(html):
+            """Devuelve los tokens a sus etiquetas originales con width:100%."""
+            for token, tag in img_placeholder.items():
+                # Asegurar width:100% en todas las imágenes restauradas
+                if 'style=' in tag:
+                    tag = _re.sub(r'style="[^"]*"', 'style="max-width:100%;width:100%;height:auto"', tag)
+                else:
+                    tag = tag.rstrip('>').rstrip('/') + ' style="max-width:100%;width:100%;height:auto">'
+                html = html.replace(token, tag)
+            for token, tag in iframe_placeholder.items():
+                html = html.replace(token, tag)
+            return html
+
+        raw_html = post.get("raw_html", "")[:4000]
+        protected = _protect_imgs(raw_html)
+        protected = _protect_iframes(protected)
 
         system = (
-            "Eres un experto en procesamiento de HTML. Se te proporciona HTML de un blog "
-            "con mucho ruido (estilos inline, fuentes hardcodeadas, divs anidados, etc.). "
-            "Extrae el contenido legible y devuélvelo como HTML semántico limpio: "
-            "usa solo p, h2, h3, ul, ol, li, blockquote, strong, em, a. "
-            "Preserva todo el texto original sin modificarlo. "
-            "Responde SOLO con el HTML limpio, sin explicaciones."
+            "Eres un experto en procesamiento de HTML semántico. "
+            "Se te proporciona HTML de un blog académico con ruido de formato. "
+            "Tu tarea: extraer el contenido textual y devolverlo como HTML semántico limpio. "
+            "REGLAS ESTRICTAS que DEBES cumplir sin excepción:\n"
+            "1. Usa solo estas etiquetas: p, h2, h3, ul, ol, li, blockquote, strong, em, a, figure, figcaption\n"
+            "2. Preserva ÍNTEGRO todo el texto original sin omitir ni añadir palabras\n"
+            "3. Los tokens ##IMG_N## y ##IFRAME_N## son SAGRADOS: cópialos EXACTAMENTE donde aparecen, sin modificarlos\n"
+            "4. NO elimines ningún token ##IMG_## ni ##IFRAME_##\n"
+            "5. NO añadas markdown, explicaciones ni texto extra\n"
+            "6. Responde SOLO con el HTML limpio"
         )
-        user = f"HTML a limpiar:\n{raw_html}"
+        user = f"HTML a limpiar:\n{protected}"
 
         result = self._call(system, user)
-        html   = result if result else clean_html
+        if result:
+            html = _restore(result)
+        else:
+            html = clean_html
 
         self._save_cache(pid, "clean_html", {"html": html})
         return html
 
     def reformat_text(self, post: dict) -> str:
         """
-        Reformatea texto muy degradado: añade párrafos, convierte bloques
-        en mayúsculas a encabezados, une palabras partidas, normaliza
-        espaciado. NO modifica el contenido, solo la estructura.
+        Reformatea texto muy degradado preservando SIEMPRE imágenes e iframes.
+        Añade párrafos, convierte bloques en mayúsculas a encabezados, une
+        palabras partidas, normaliza espaciado. NO modifica el contenido.
         """
         pid = post.get("id", post.get("title", ""))
         cached = self._load_cache(pid, "reformat")
         if cached:
             return cached.get("html", post.get("clean_html", ""))
 
-        from bs4 import BeautifulSoup
+        import re as _re
         clean_html = post.get("clean_html", "")
         soup       = BeautifulSoup(clean_html, "html.parser")
         text       = soup.get_text(" ", strip=True)
@@ -370,23 +438,56 @@ class AIEnricher:
         if upper_ratio < 0.25 and len(text) < 500:
             return clean_html
 
+        # Proteger imágenes e iframes
+        img_placeholder    = {}
+        iframe_placeholder = {}
+
+        def _protect(html):
+            imgs = _re.findall(r'<img[^>]*>', html, _re.IGNORECASE | _re.DOTALL)
+            for n, tag in enumerate(imgs):
+                token = f"##IMG_{n}##"
+                img_placeholder[token] = tag
+                html = html.replace(tag, token, 1)
+            iframes = _re.findall(
+                r'<div[^>]*yt-wrap[^>]*>.*?</div>|<iframe[^>]*>.*?</iframe>',
+                html, _re.IGNORECASE | _re.DOTALL)
+            for n, tag in enumerate(iframes):
+                token = f"##IFRAME_{n}##"
+                iframe_placeholder[token] = tag
+                html = html.replace(tag, token, 1)
+            return html
+
+        def _restore(html):
+            for token, tag in img_placeholder.items():
+                if 'style=' not in tag:
+                    tag = tag.rstrip('>').rstrip('/') + ' style="max-width:100%;width:100%;height:auto">'
+                html = html.replace(token, tag)
+            for token, tag in iframe_placeholder.items():
+                html = html.replace(token, tag)
+            return html
+
+        protected = _protect(clean_html[:3000])
+
         system = (
-            "Eres un editor académico especializado en documentación y ciencias de la información. "
-            "Se te proporciona un fragmento de texto HTML extraído de un blog académico. "
-            "El texto tiene problemas de formato: bloques en MAYÚSCULAS que deberían ser encabezados, "
-            "párrafos sin separar, palabras unidas sin espacio, puntuación incorrecta. "
-            "Tu tarea: mejorar la estructura y legibilidad del texto aplicando estas reglas:\n"
-            "1. Convierte bloques en MAYÚSCULAS que parecen títulos de sección a <h3> con Title Case en español\n"
+            "Eres un editor académico especializado en documentación. "
+            "Se te proporciona un fragmento de HTML con problemas de formato. "
+            "Aplica EXACTAMENTE estas reglas:\n"
+            "1. Convierte bloques en MAYÚSCULAS que parecen títulos a <h3> con Title Case español\n"
             "2. Separa bloques de texto denso en párrafos <p> lógicos\n"
-            "3. Une palabras que estén separadas incorrectamente (ej: 'estu dios' -> 'estudios')\n"
-            "4. Normaliza mayúsculas en titulares (Title Case español)\n"
-            "5. Conserva TODO el contenido textual sin omitir ni añadir información\n"
-            "6. Devuelve SOLO el HTML mejorado, sin explicaciones ni markdown."
+            "3. Une palabras incorrectamente separadas (ej: 'estu dios' → 'estudios')\n"
+            "4. Normaliza mayúsculas en titulares a Title Case español\n"
+            "5. Los tokens ##IMG_N## y ##IFRAME_N## son SAGRADOS: "
+            "cópialos EXACTAMENTE donde aparecen, sin modificarlos ni eliminarlos\n"
+            "6. Conserva TODO el contenido textual sin omitir ni añadir información\n"
+            "7. Devuelve SOLO el HTML mejorado, sin explicaciones"
         )
-        user = f"HTML a reformatear:\n{clean_html[:4000]}"
+        user = f"HTML a reformatear:\n{protected}"
 
         result = self._call(system, user)
-        html   = result if result else clean_html
+        if result:
+            html = _restore(result)
+        else:
+            html = clean_html
 
         self._save_cache(pid, "reformat", {"html": html})
         return html
@@ -440,15 +541,14 @@ class AIEnricher:
         enriched  = []
 
         if progress_cb:
-            progress_cb(f"  🤖 Modelo: {self.model}")
-            progress_cb(f"  📋 Tareas activas: {', '.join(tasks) if tasks else 'ninguna'}")
-            progress_cb(f"  📦 Procesando {total} posts en lotes de {self.batch_size}…")
+            progress_cb(f"  Modelo: {self.model}")
+            progress_cb(f"  Tareas activas: {', '.join(tasks) if tasks else 'ninguna'}")
+            progress_cb(f"  Procesando {total} posts uno a uno (batch_size={self.batch_size})...")
 
         for i, post in enumerate(posts, 1):
-            title_short = (post.get("title", "") or "")[:50]
-
-            if progress_cb and i % self.batch_size == 1:
-                progress_cb(f"  IA — lote {(i-1)//self.batch_size + 1}: posts {i}–{min(i+self.batch_size-1, total)}")
+            title_short = (post.get("title", "") or "")[:55]
+            if progress_cb:
+                progress_cb(f"  IA [{i:03d}/{total}] {title_short}")
 
             try:
                 if "generate_tags" in tasks:
@@ -490,8 +590,8 @@ class AIEnricher:
 
             enriched.append(post)
 
-            # Pausa entre lotes para no saturar el modelo
-            if i % self.batch_size == 0 and i < total:
+            # Pausa entre posts para no saturar el modelo
+            if i < total and self.delay > 0:
                 time.sleep(self.delay)
 
         if progress_cb:

@@ -9,11 +9,16 @@ import time
 import re
 import json
 import logging
+import urllib3
 from io import BytesIO
 from xml.etree import ElementTree as ET
 from urllib.parse import urljoin, urlparse
 from datetime import datetime
 from pathlib import Path
+
+# Suprimir advertencias SSL para blogs con certificados mal configurados
+# (habitual en blogs de Blogger con dominios personalizados antiguos)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,7 @@ def fetch_all_posts(blog_url: str, config: dict, progress_cb=None) -> list:
     delay      = config.get("scraping", {}).get("delay_between_requests", 1.5)
     timeout    = config.get("scraping", {}).get("timeout", 30)
     max_p      = config.get("scraping", {}).get("max_posts_per_blog", 0)
+    verify_ssl = config.get("scraping", {}).get("verify_ssl", False)
     batch_size = 25
     headers    = {"User-Agent": config.get("scraping", {}).get(
         "user_agent", "Mozilla/5.0 (compatible; BlogPreservationBot/1.0)")}
@@ -66,7 +72,7 @@ def fetch_all_posts(blog_url: str, config: dict, progress_cb=None) -> list:
 
         try:
             t0   = time.time()
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp = requests.get(url, headers=headers, timeout=timeout, verify=verify_ssl)
             resp.raise_for_status()
             elapsed = time.time() - t0
             _log(progress_cb, f"     HTTP {resp.status_code} en {elapsed:.1f}s ({len(resp.content)//1024} KB)")
@@ -175,7 +181,9 @@ def _parse_entry(entry, blog_url: str, headers: dict, config: dict, progress_cb=
     max_kb       = config.get("output", {}).get("max_image_size_kb", 500)
     images_b64   = {}
     if embed_images and raw_html and img_count > 0:
-        images_b64 = _download_images(raw_html, blog_url, headers, max_kb, progress_cb)
+        images_b64 = _download_images(raw_html, blog_url, headers, max_kb,
+                                      config.get("scraping", {}).get("verify_ssl", False),
+                                      progress_cb)
 
     return {
         "id":         post_id,
@@ -214,7 +222,8 @@ def _blogger_size_variants(url: str) -> list:
 
 
 def _download_images(html: str, base_url: str, headers: dict,
-                     max_kb: int, progress_cb=None) -> dict:
+                     max_kb: int, verify_ssl: bool = False,
+                     progress_cb=None) -> dict:
     img_pattern = re.compile(r'<img[^>]+src=["\']([^"\'>\s]+)["\']', re.IGNORECASE)
     urls        = list(dict.fromkeys(img_pattern.findall(html)))
     result      = {}
@@ -236,7 +245,7 @@ def _download_images(html: str, base_url: str, headers: dict,
         downloaded = False
         for variant_url in variants:
             try:
-                resp = requests.get(variant_url, headers=headers, timeout=15)
+                resp = requests.get(variant_url, headers=headers, timeout=15, verify=verify_ssl)
                 if resp.status_code != 200:
                     continue
 
