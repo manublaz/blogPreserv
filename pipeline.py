@@ -67,12 +67,30 @@ def run_blog(blog_cfg: dict, config: dict, progress_cb=None, force_extract: bool
         # ── FASE 1: EXTRACCIÓN ──────────────────────────────────────
         log(f"▶ FASE 1/6 — Extracción: {title}")
 
-        raw_exists = (output_dir / "raw" / f"{slug}_raw.json").exists()
+        raw_path   = output_dir / "raw" / f"{slug}_raw.json"
+        raw_exists = raw_path.exists()
+
+        # Caché válida = archivo existe Y tiene al menos un post
+        # Una caché vacía (resultado de un intento fallido anterior) debe ignorarse
+        cache_valid = False
         if raw_exists and not force_extract:
-            log(f"  ↺ Usando datos crudos en caché (usa force_extract=True para re-descargar)")
-            posts = load_raw(output_dir, slug)
-        else:
-            posts = fetch_all_posts(url, config, progress_cb=log)
+            cached = load_raw(output_dir, slug)
+            if cached:
+                cache_valid = True
+                posts = cached
+                explicit_feed = blog_cfg.get("feed_url", "").strip()
+                if explicit_feed:
+                    log(f"  ↺ Usando datos crudos en caché — feed configurado: {explicit_feed}")
+                else:
+                    log(f"  ↺ Usando datos crudos en caché (usa force_extract=True para re-descargar)")
+            else:
+                log(f"  ⚠ Caché vacía detectada (intento anterior fallido) — re-extrayendo...")
+
+        if not cache_valid:
+            explicit_feed = blog_cfg.get("feed_url", "").strip()
+            if explicit_feed:
+                log(f"  ℹ feed_url explícita configurada: {explicit_feed}")
+            posts = fetch_all_posts(url, config, progress_cb=log, blog_cfg=blog_cfg)
             save_raw(posts, output_dir, slug)
 
         if not posts:
@@ -100,24 +118,33 @@ def run_blog(blog_cfg: dict, config: dict, progress_cb=None, force_extract: bool
         # ── FASE 4: GENERACIÓN ──────────────────────────────────────
         log(f"▶ FASE 4/6 — Generando HTML")
         out_path = generate_site(posts, blog_cfg, config, output_dir)
-        log(f"  ✓ Archivo generado: {out_path}")
+        is_dir = out_path.is_dir()   # True en modo multi-fichero (single_file: false)
+        if is_dir:
+            log(f"  ✓ Sitio generado (multi-fichero): {out_path}  [{len(posts)} páginas]")
+        else:
+            log(f"  ✓ Archivo generado: {out_path}")
 
         # ── FASE 5: MÉTRICAS DE CALIDAD ─────────────────────────────
         quality_enabled = config.get("quality_metrics", {}).get("enabled", True)
         log(f"▶ FASE 5/6 — Métricas de calidad {'(activo)' if quality_enabled else '(deshabilitado)'}")
-        if quality_enabled and out_path.exists():
-            html_output = out_path.read_text(encoding="utf-8")
-            q_report = compute_metrics(
-                posts_original=posts_original,
-                posts_cleaned=posts,
-                html_output=html_output,
-                blog_title=title,
-                slug=slug,
-                progress_cb=log,
-            )
-            q_report.save(output_dir)
-            result["quality"] = q_report.to_dict()
-            log(f"  ✓ Puntuación global: {q_report.metrics.get('M10_global_score', 0):.1%}")
+        if quality_enabled:
+            # Modo multi-fichero: analizar el index.html; modo único: el propio archivo
+            html_file = (out_path / "index.html") if is_dir else out_path
+            if html_file.exists():
+                html_output = html_file.read_text(encoding="utf-8")
+                q_report = compute_metrics(
+                    posts_original=posts_original,
+                    posts_cleaned=posts,
+                    html_output=html_output,
+                    blog_title=title,
+                    slug=slug,
+                    progress_cb=log,
+                )
+                q_report.save(output_dir)
+                result["quality"] = q_report.to_dict()
+                log(f"  ✓ Puntuación global: {q_report.metrics.get('M10_global_score', 0):.1%}")
+            else:
+                log(f"  ⚠ No se encontró el HTML de salida para calcular métricas")
 
         # ── FASE 6: EXPORTACIÓN OAI-PMH ──────────────────────────────────
         oai_enabled = config.get("oai_pmh", {}).get("enabled", False)

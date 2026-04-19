@@ -2,32 +2,33 @@ blogs:
   - url: "https://cinedocnet-patrimonio.blogspot.com/"
     type: "blogspot"
     title: "CineDocNet - Patrimonio"
-    enabled: true
+    enabled: false
 
   - url: "http://www.redauvi.com/"
     type: "blogspot"
     title: "RedAuvi"
-    enabled: true
+    enabled: false
 
   - url: "https://meitdoc.blogspot.com/"
     type: "blogspot"
     title: "MEIT Doc"
-    enabled: true
+    enabled: false
 
   - url: "https://archivozmagazine.blogspot.com/"
     type: "blogspot"
     title: "Archivoz Magazine"
-    enabled: true
+    enabled: false
 
-  - url: "http://bibliored30.com/"
+  - url: "http://www.bibliored30.com/"
     type: "blogspot"
     title: "Bibliored30"
     enabled: true
+    feed_url: "https://www.blogger.com/feeds/4925700778747753166/posts/default"
 
   - url: "https://redauviccinf.blogspot.com/"
     type: "blogspot"
     title: "REDAUVICCINF Patrimonio audiovisual iberoamericano en ciencias informacióne"
-    enabled: true
+    enabled: false
 
 author:
   name: "Alfonso López Yepes"
@@ -50,8 +51,8 @@ output:
   embed_images: true
   # single_file: false  → un único archivo HTML autocontenido (recomendado para <200 entradas)
   # single_file: false → carpeta blog-slug/ con index.html + una página HTML por entrada
-  #                      (recomendado para blogs grandes, evita archivos de cientos de MB)
-  single_file: true
+  # (recomendado para blogs grandes, evita archivos de cientos de MB)
+  single_file: false
   max_image_size_kb: 5000000
 
 scraping:

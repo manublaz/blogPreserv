@@ -49,7 +49,18 @@ def _short_url(url: str, max_len: int = 70) -> str:
     return url[:max_len // 2] + "..." + url[-(max_len // 2):]
 
 
-def fetch_all_posts(blog_url: str, config: dict, progress_cb=None) -> list:
+def fetch_all_posts(blog_url: str, config: dict, progress_cb=None,
+                    blog_cfg: dict = None) -> list:
+    """
+    Descarga todos los posts de un blog Blogger via Atom Feed.
+
+    Estrategia de resolución del feed (en orden de prioridad):
+      1. feed_url explícita en blog_cfg (config.yaml)  → uso directo, sin cálculo
+      2. URL del blog con /feeds/posts/default          → comportamiento anterior
+      3. Si el feed redirige a un dominio personalizado muerto:
+         se intenta el feed desde la URL blogspot.com nativa (si es posible inferirla)
+      4. Fallback a Wayback Machine para el último snapshot del feed
+    """
     delay      = config.get("scraping", {}).get("delay_between_requests", 1.5)
     timeout    = config.get("scraping", {}).get("timeout", 30)
     max_p      = config.get("scraping", {}).get("max_posts_per_blog", 0)
@@ -58,13 +69,27 @@ def fetch_all_posts(blog_url: str, config: dict, progress_cb=None) -> list:
     headers    = {"User-Agent": config.get("scraping", {}).get(
         "user_agent", "Mozilla/5.0 (compatible; BlogPreservationBot/1.0)")}
 
-    feed_base   = _build_feed_url(blog_url)
+    # ── Resolver la URL base del feed ────────────────────────────────────────
+    # Prioridad 1: feed_url explícita en config.yaml
+    explicit_feed = (blog_cfg or {}).get("feed_url", "").strip()
+    if explicit_feed:
+        feed_base = explicit_feed.rstrip("?").rstrip("&")
+        # Quitar parámetros si el usuario pegó la URL con ?start-index=...
+        if "?" in feed_base:
+            feed_base = feed_base.split("?")[0]
+        _log(progress_cb, f"  Feed (explícito): {feed_base}")
+    else:
+        feed_base = _build_feed_url(blog_url)
+        # Prioridad 2: comprobar si el feed resuelve o redirige a un dominio muerto
+        feed_base = _resolve_feed_url(feed_base, blog_url, headers, timeout,
+                                      verify_ssl, progress_cb)
+        _log(progress_cb, f"  Feed: {feed_base}")
+
+    _log(progress_cb, f"  Delay: {delay}s  Timeout: {timeout}s  Max posts: {max_p or 'sin limite'}")
+
     posts       = []
     start_index = 1
     page        = 1
-
-    _log(progress_cb, f"  Feed: {feed_base}")
-    _log(progress_cb, f"  Delay: {delay}s  Timeout: {timeout}s  Max posts: {max_p or 'sin limite'}")
 
     while True:
         url = f"{feed_base}?start-index={start_index}&max-results={batch_size}"
@@ -126,6 +151,162 @@ def fetch_all_posts(blog_url: str, config: dict, progress_cb=None) -> list:
 
     _log(progress_cb, f"  TOTAL EXTRAIDOS: {len(posts)} posts")
     return posts
+
+
+def _resolve_feed_url(feed_url: str, blog_url: str, headers: dict,
+                      timeout: int, verify_ssl: bool, progress_cb=None) -> str:
+    """
+    Verifica que el feed URL es accesible y devuelve Atom XML.
+    Estrategia de resolución en orden de prioridad:
+
+    1. Normalizar ccTLD (.blogspot.com.es → .blogspot.com)
+    2. Comprobar accesibilidad directa
+    3. Si falla: descargar una primera página del feed desde blogger.com/feeds/ID
+       extrayendo el blog ID del feed <link rel='self'> (la URL interna permanente
+       de Blogger que funciona aunque el dominio personalizado esté caído)
+    4. Si falla: inferir subdominio blogspot.com nativo desde el dominio
+    5. Fallback a Wayback Machine
+    """
+    import re as _re
+
+    # ── 1. Normalizar ccTLD de Blogger (.blogspot.com.XX → .blogspot.com) ────
+    ccTLD_pattern = _re.compile(
+        r'(https?://[^/]*\.blogspot\.com)\.[a-z]{2,3}(/.*)?$', _re.IGNORECASE
+    )
+    m = ccTLD_pattern.match(feed_url)
+    if m:
+        normalized = m.group(1) + (m.group(2) or "")
+        _log(progress_cb, f"  ℹ ccTLD detectado — normalizando feed a: {normalized}")
+        feed_url = normalized
+
+    # ── Helper: comprobar accesibilidad con HEAD ───────────────────────────
+    def _is_alive(url: str) -> tuple:
+        """Devuelve (accessible: bool, final_url: str, error: str)"""
+        try:
+            r = requests.head(url, headers=headers, timeout=min(timeout, 15),
+                              verify=verify_ssl, allow_redirects=True)
+            if r.status_code < 400:
+                return True, r.url, ""
+            return False, r.url, f"HTTP {r.status_code}"
+        except requests.exceptions.ConnectionError as e:
+            return False, url, f"DNS/conexión: {str(e)[:80]}"
+        except requests.exceptions.Timeout:
+            return False, url, "timeout"
+        except Exception as e:
+            return False, url, str(e)[:80]
+
+    # ── Helper: extraer el blog ID de un Atom feed ya descargado ──────────
+    def _extract_blogger_id_from_feed(xml_bytes: bytes) -> str:
+        """
+        Busca <link rel='self' href='http://www.blogger.com/feeds/ID/posts/default'/>
+        en el XML del feed y devuelve el ID numérico del blog, o "" si no lo encuentra.
+        """
+        # Búsqueda por regex sobre bytes (no hace falta parsear el XML completo)
+        m = _re.search(
+            rb'<link[^>]*rel=[\'"]self[\'"][^>]*href=[\'"]'
+            rb'https?://(?:www\.)?blogger\.com/feeds/(\d+)/posts/default[\'"]',
+            xml_bytes, _re.IGNORECASE
+        )
+        if m:
+            return m.group(1).decode("ascii")
+        # Intentar también el orden inverso href antes que rel
+        m2 = _re.search(
+            rb'<link[^>]*href=[\'"]https?://(?:www\.)?blogger\.com/feeds/(\d+)/posts/default[\'"]'
+            rb'[^>]*rel=[\'"]self[\'"]',
+            xml_bytes, _re.IGNORECASE
+        )
+        return m2.group(1).decode("ascii") if m2 else ""
+
+    # ── 2. Comprobar accesibilidad directa ────────────────────────────────
+    alive, final_url, err = _is_alive(feed_url)
+
+    if alive:
+        final_feed = _build_feed_url(final_url) if "/feeds/posts/default" not in final_url else final_url
+        if final_feed != feed_url:
+            _log(progress_cb, f"  ℹ Redirigido a: {final_feed}")
+        return final_feed
+
+    # ── 3. Intentar obtener el ID interno de Blogger ──────────────────────
+    # Si el dominio personalizado falla en HEAD pero el servidor de Blogger
+    # tiene caché del feed, a veces un GET a www.blogger.com/feeds/ID funciona.
+    # Para obtener el ID necesitamos descargar aunque sea la primera página del feed
+    # desde una URL alternativa (blogger.com directo).
+    _log(progress_cb, f"  ⚠ Feed no accesible ({err}) — buscando ID interno de Blogger...")
+
+    # Intentar construir la URL de blogger.com a partir del blog_url
+    # Blogger expone siempre: https://www.blogger.com/feeds/<blogID>/posts/default
+    # pero no podemos conocer el ID sin haber leído el feed al menos una vez.
+    # Intentamos una petición GET a la URL normalizada con blogger.com como host:
+    blogger_api_url = None
+    parsed_feed = urlparse(feed_url)
+    # Si la URL del feed ya apunta a blogspot.com, podemos probar blogger.com
+    # con el mismo path
+    if "blogspot.com" in parsed_feed.netloc:
+        blogger_api_url = f"https://www.blogger.com{parsed_feed.path}"
+
+    if blogger_api_url:
+        try:
+            r = requests.get(
+                f"{blogger_api_url}?start-index=1&max-results=1",
+                headers=headers, timeout=min(timeout, 20),
+                verify=verify_ssl, allow_redirects=True
+            )
+            if r.status_code == 200 and (b"<feed" in r.content or b"<?xml" in r.content):
+                blog_id = _extract_blogger_id_from_feed(r.content)
+                if blog_id:
+                    id_feed = f"https://www.blogger.com/feeds/{blog_id}/posts/default"
+                    _log(progress_cb, f"  ✓ ID interno encontrado → usando: {id_feed}")
+                    return id_feed
+        except Exception:
+            pass
+
+    # ── 4. Inferir subdominio blogspot.com nativo ─────────────────────────
+    parsed_blog = urlparse(blog_url)
+    blog_host   = parsed_blog.netloc.lower().replace("www.", "")
+
+    if blog_host.endswith(".blogspot.com"):
+        blogspot_subdomain = blog_host
+    else:
+        domain_base = blog_host.split(".")[0]
+        blogspot_subdomain = f"{domain_base}.blogspot.com"
+        _log(progress_cb, f"  ℹ Probando subdominio inferido: {blogspot_subdomain}")
+
+    native_feed = f"https://{blogspot_subdomain}/feeds/posts/default"
+    alive2, _, err2 = _is_alive(native_feed)
+
+    if alive2:
+        # Intentar extraer el ID interno desde esta URL nativa también
+        try:
+            r2 = requests.get(
+                f"{native_feed}?start-index=1&max-results=1",
+                headers=headers, timeout=min(timeout, 20),
+                verify=verify_ssl, allow_redirects=True
+            )
+            if r2.status_code == 200:
+                blog_id = _extract_blogger_id_from_feed(r2.content)
+                if blog_id:
+                    id_feed = f"https://www.blogger.com/feeds/{blog_id}/posts/default"
+                    _log(progress_cb, f"  ✓ ID interno extraído del feed nativo → usando: {id_feed}")
+                    return id_feed
+        except Exception:
+            pass
+        _log(progress_cb, f"  ✓ URL nativa accesible: {native_feed}")
+        return native_feed
+
+    # ── 5. Fallback: Wayback Machine ──────────────────────────────────────
+    _log(progress_cb, f"  ⚠ URL nativa también falla ({err2}) — intentando Wayback Machine...")
+    wayback_feed = f"https://web.archive.org/web/2if_/{feed_url}"
+    alive3, _, _ = _is_alive(wayback_feed)
+    if alive3:
+        _log(progress_cb, f"  ✓ Usando snapshot de Wayback Machine: {wayback_feed}")
+        return wayback_feed
+
+    # Nada funcionó — devolver la URL original con diagnóstico claro
+    _log(progress_cb, f"  ✗ No se pudo resolver el feed automáticamente.")
+    _log(progress_cb, f"    Solución manual: añade en config.yaml para este blog:")
+    _log(progress_cb, f"    feed_url: \"https://www.blogger.com/feeds/<ID>/posts/default\"")
+    _log(progress_cb, f"    El ID lo encuentras en el XML del feed: <link rel='self' href='...blogger.com/feeds/ID/...'/>")
+    return feed_url
 
 
 def _build_feed_url(blog_url: str) -> str:
