@@ -101,3 +101,9 @@ scraping:
 - **Open Graph** (og:title, og:description…)
 - **Schema.org** BlogPosting (JSON-LD)
 - **METS** (Metadata Encoding and Transmission Standard) como comentario estructurado
+
+## 📚 Citas y referencias
+
+Si utilizas **BlogPreserv** en tu investigación o docencia, por favor cítalo de la siguiente forma:
+
+> Blázquez Ochando, M. (2025). *BlogPreserv: Sistema de preservación digital de Blogs* (v1.0.0) [Software]. GitHub. https://github.com/manublaz/blogPreserv
