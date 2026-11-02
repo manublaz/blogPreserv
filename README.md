@@ -106,4 +106,4 @@ scraping:
 
 Si utilizas **BlogPreserv** en tu investigación o docencia, por favor cítalo de la siguiente forma:
 
-> Blázquez Ochando, M. (2025). *BlogPreserv: Sistema de preservación digital de Blogs* (v1.0.0) [Software]. GitHub. https://github.com/manublaz/blogPreserv
+> Blázquez Ochando, M.; Prieto Gutiérrez, J.J.; Ovalle Perandones, M.A. (2025). *BlogPreserv: Sistema de preservación digital de Blogs* (v1.0.0) [Software]. GitHub. https://github.com/manublaz/blogPreserv
